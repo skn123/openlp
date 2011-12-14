@@ -1,13 +1,5 @@
-/*
-__kernel void adjust(__global float *A, int matrixSize) {
-	for(int i = 0; i < matrixSize;i++){
-		A[i] = A[i] + 0.1;
-	}
-}
-*/
-
-__kernel void inverse(__global float const *Min, __global float *Mout, int actualsize) {
-
+//Takes in row-major matrix and produces the col-major inverse of the matrix
+__kernel void inverse(__global float *Min, __global float *Mout, int actualsize) {
     /* Loop variables */
     int i, j, k;
     /* Sum variables */
@@ -78,4 +70,15 @@ __kernel void inverse(__global float const *Min, __global float *Mout, int actua
             Mout[j*actualsize+i] = sum;
         }
     }
+
+	int count = 0;
+	for(i = 0; i < actualsize; i++){
+		for(j = 0; j < actualsize*actualsize; j+=actualsize){
+			Min[count] = Mout[i+j];
+			count++;
+		}
+	}
+
+	for(i = 0; i < actualsize*actualsize; i++)
+		Mout[i] = Min[i];
 }
