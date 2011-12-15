@@ -8,6 +8,10 @@
 
 #include "f2c.h"
 
+#define INCOMPLETE 1
+#define COMPLETE 0
+#define ERROR -1
+#define UNBOUNDED -2
 
 void split_matrix(const ELEM* input, ELEM* outputB, ELEM* outputN, const int* indicesB, const int* indicesN, const int sizeM, const int sizeN, const int sizeP) {
   int i;
@@ -127,7 +131,9 @@ typedef struct App {
   
 } App;
 
-void pivot(App *app) {
+int pivot(App *app) {
+  app->curObj = app->newObj;
+
   printf("Matrix A:\n");
   print_matrix(app->A, app->NUM_ROWS, app->NUM_COLS);
   printf("Matrix C:\n");
@@ -138,7 +144,7 @@ void pivot(App *app) {
   printf("Matrix A_B:\n");
   print_matrix(app->A_B, app->NUM_B_INDICES, app->NUM_B_INDICES);
   printf("Matrix A_N:\n");
-  print_matrix(app->A_N, app->NUM_N_INDICES, app->NUM_B_INDICES);
+  print_matrix(app->A_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
   printf("\n");
 
   split_matrix(app->C, app->C_B, app->C_N, app->indices_B, app->indices_N, app->NUM_B_INDICES, app->NUM_N_INDICES, 1);
@@ -175,8 +181,8 @@ void pivot(App *app) {
   max_of_vector(app->zRow, app->NUM_N_INDICES, &max_value, &max_pos);
 
   if (max_value < 0) {
-    printf("Dictionary is final\n");
-    return;
+    printf("Dictionary is final: %f\n", app->curObj);
+    return COMPLETE;
   }
 
   printf("Entering variable: %i\n", app->indices_N[max_pos]);
@@ -213,7 +219,7 @@ void pivot(App *app) {
   if (leaveInd < 0) {
     printf("No leaving variable.  Problem is unbounded\n");
     app->newObj = INFINITY;
-    return;
+    return UNBOUNDED;
   }
 
   int leaveVar = app->indices_B[leaveInd];
@@ -242,14 +248,18 @@ void pivot(App *app) {
   for (i = 0; i < app->NUM_N_INDICES; ++i) 
     printf("%i ", app->indices_N[i]);
   printf("\n");
+
+  return INCOMPLETE;
 }  
 
 
 int main() {
   App app;
 
+  //int NUM_ROWS = 3;
+  //int NUM_COLS = 6;
   int NUM_ROWS = 3;
-  int NUM_COLS = 6;
+  int NUM_COLS = 5;
 
   app.NUM_ROWS = NUM_ROWS;
   app.NUM_COLS = NUM_COLS;
@@ -278,6 +288,7 @@ int main() {
   app.indices_B = (int *)malloc(sizeof(int) * (NUM_COLS - NUM_ROWS));
 
   app.curObj = 0;
+  app.newObj = 0;
 /*
   ELEM A[NUM_ROWS * NUM_COLS] = {2, 3, 1, 2, -2, -3, -1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1};
   ELEM C[NUM_COLS] = {1, 3, -1, 0, 0, 0};
@@ -301,6 +312,8 @@ int main() {
   int indices_B[NUM_B_INDICES] = {3, 4, 5};
   int indices_N[NUM_N_INDICES] = {0, 1, 2};
 */
+/* 
+  //UNBOUNDED
   app.A[0] = 2;
   app.A[1] = 3;
   app.A[2] = 1;
@@ -338,7 +351,41 @@ int main() {
   app.indices_N[0] = 0;
   app.indices_N[1] = 1;
   app.indices_N[2] = 2;
+*/
+  //BOUNDED
+  app.A[0] = -4;
+  app.A[1] = -2;
+  app.A[2] = 1;
+  app.A[3] = -1;
+  app.A[4] = 1;
+  app.A[5] = 2;
+  app.A[6] = 1;
+  app.A[7] = 0;
+  app.A[8] = 0;
+  app.A[9] = 0;
+  app.A[10] = 1;
+  app.A[11] = 0;
+  app.A[12] = 0;
+  app.A[13] = 0;
+  app.A[14] = 1;
 
-  pivot(&app);
+  app.B[0] = 4;
+  app.B[1] = 8;
+  app.B[2] = 4;
+  
+  app.C[0] = -3;
+  app.C[1] = 5;
+  app.C[2] = 0;
+  app.C[3] = 0;
+  app.C[4] = 0;
+
+  app.indices_B[0] = 2;
+  app.indices_B[1] = 3;
+  app.indices_B[2] = 4;
+
+  app.indices_N[0] = 0;
+  app.indices_N[1] = 1;
+
+  while (pivot(&app) == INCOMPLETE);
 }
 
