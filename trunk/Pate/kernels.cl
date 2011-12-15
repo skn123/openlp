@@ -1,12 +1,12 @@
 __kernel void multiply(__global float *a, __global float *b, __global float *x, int acols, int arows, int bcols, int brows){
-	int tempy = get_local_id(0);
-	int tempx = get_local_id(1);
-	
+	int tempx = get_local_id(0);
+	int tempy = get_local_id(1);
+
 	float sum = 0.0;
 	for(int i = 0; i < acols; i++){
-		sum += A[tempy * arows + i] * B[i * bcols + tempx]; 
+		sum += a[tempy]*b[tempx];
 	}
-	X[i*arows+j] = sum;
+	x[tempx * arows + tempy] = sum;
 }
 
 /*

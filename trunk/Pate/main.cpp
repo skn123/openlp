@@ -1,13 +1,18 @@
 #include <iostream>
 #include <string>
 #include <stdio.h>
-#include <CL/cl.h>
 #include <vector>
 #include <fstream>
 #include <sstream>
 #include <stdlib.h>
 #include <limits>
 #include <iomanip>
+
+#ifdef __APPLE__
+#include <OpenCL/opencl.h>
+#else
+#include <CL/cl.h>
+#endif
 
 using namespace std;
 
@@ -91,7 +96,6 @@ int main(){
         ((float*)X)[i] = (float)matrix[i];
     }
 
-	//Create the Identity matrix for testing
 	cl_float *Min = (cl_float *)malloc(3*3*sizeof(cl_float));
 	Min[0] = 1; Min[1] = 3; Min[2] = 1;
 	Min[3] = 1; Min[4] = 1; Min[5] = 2;
@@ -133,10 +137,10 @@ int main(){
 	cl_float amatrix[] = {1, 4, 2, 5, 3, 6};
 	cl_float bmatrix[] = {9, 8, 7};
 	cl_float xmatrix[2] = {0};
-	cl_int arows = 2;
-	cl_int acols = 3;
-	cl_int brows = 3;
-	cl_int bcols = 1;
+	cl_int arows = 3;
+	cl_int acols = 2;
+	cl_int brows = 1;
+	cl_int bcols = 3;
 
 	cl_mem a_mem_obj = clCreateBuffer(context, CL_MEM_READ_ONLY, arows*acols*sizeof(cl_float),NULL,&ret);
 	cl_mem b_mem_obj = clCreateBuffer(context, CL_MEM_READ_ONLY, brows*bcols*sizeof(cl_float),NULL,&ret);
@@ -168,40 +172,62 @@ int main(){
 
 	// Set the arguments of the multiply kernel
 	//__kernel void multiply(__global float *a, __global float *b, __global float *x, int arows, int brows, int bcols) {
+	/*
 	ret = clSetKernelArg(multiply_kernel, 0, sizeof(cl_mem), (void*)&a_mem_obj);
 	ret = clSetKernelArg(multiply_kernel, 1, sizeof(cl_mem), (void*)&b_mem_obj);
 	ret = clSetKernelArg(multiply_kernel, 2, sizeof(cl_mem), (void*)&x_mem_obj);
 	ret = clSetKernelArg(multiply_kernel, 3, sizeof(cl_int), (void*)&arows);
 	ret = clSetKernelArg(multiply_kernel, 4, sizeof(cl_int), (void*)&brows);
 	ret = clSetKernelArg(multiply_kernel, 5, sizeof(cl_int), (void*)&bcols);
-	
+	*/
+
+	//__kernel void multiply(__global float *a, __global float *b, __global float *x, int acols int arows, int bcols, int brows){
+	ret = clSetKernelArg(multiply_kernel, 0, sizeof(cl_mem), (void*)&a_mem_obj);
+	ret = clSetKernelArg(multiply_kernel, 1, sizeof(cl_mem), (void*)&b_mem_obj);
+	ret = clSetKernelArg(multiply_kernel, 2, sizeof(cl_mem), (void*)&x_mem_obj);
+	ret = clSetKernelArg(multiply_kernel, 3, sizeof(cl_int), (void*)&acols);
+	ret = clSetKernelArg(multiply_kernel, 4, sizeof(cl_int), (void*)&arows);
+	ret = clSetKernelArg(multiply_kernel, 5, sizeof(cl_int), (void*)&bcols);
+	ret = clSetKernelArg(multiply_kernel, 6, sizeof(cl_int), (void*)&brows);
 
     // Execute the OpenCL kernel on the list
     ret = clEnqueueTask(command_queue, inverse_kernel, 0, NULL,NULL);
-	ret = clEnqueueTask(command_queue, multiply_kernel, 0, NULL, NULL);
+	//ret = clEnqueueTask(command_queue, multiply_kernel, 0, NULL, NULL);
 
-	cl_float meh[9] = {1.1};
+	size_t localWorkSize[2], globalWorkSize[2];
+	localWorkSize[0] = 3;
+    localWorkSize[1] = 3;
+    globalWorkSize[0] = 3;
+    globalWorkSize[1] = 3;
+
+	ret = clEnqueueNDRangeKernel(command_queue, multiply_kernel, 2, NULL, globalWorkSize, localWorkSize, 0, NULL, NULL);
+
+	cl_float readFromInverse[9] = {1.1};
  
     // Read the memory buffer C on the device to the local variable C
-	ret = clEnqueueReadBuffer(command_queue, Mout_mem_obj, CL_TRUE, 0, 3*3*sizeof(cl_float), meh, 0, NULL, NULL);
+	ret = clEnqueueReadBuffer(command_queue, Mout_mem_obj, CL_TRUE, 0, 3*3*sizeof(cl_float), readFromInverse, 0, NULL, NULL);
 	
-	ret = clEnqueueReadBuffer(command_queue, x_mem_obj, CL_TRUE, 0, arows*bcols*sizeof(cl_float), xmatrix, 0, NULL, NULL);
+	ret = clEnqueueReadBuffer(command_queue, x_mem_obj, CL_TRUE, 0, acols*brows*sizeof(cl_float), xmatrix, 0, NULL, NULL);
 
     // Display the result to the screen
     for(int i = 0; i < 9; i++)
-		cout << "MEH:" << meh[i] << " ";
+		cout << readFromInverse[i] << " ";
 	cout << endl;
  
 	for(int i = 0; i < 2; i++)
-		cout << "Xmatrix:" << xmatrix[i] << " ";
+		cout << xmatrix[i] << " ";
 	cout << endl;
 
     // Clean up
     ret = clFlush(command_queue);
     ret = clFinish(command_queue);
     ret = clReleaseKernel(inverse_kernel);
+	ret = clReleaseKernel(multiply_kernel);
     ret = clReleaseProgram(program);
     ret = clReleaseMemObject(matrix_mem_obj);
+	ret = clReleaseMemObject(a_mem_obj);
+	ret = clReleaseMemObject(b_mem_obj);
+	ret = clReleaseMemObject(x_mem_obj);
     ret = clReleaseCommandQueue(command_queue);
     ret = clReleaseContext(context);
     free(X);
