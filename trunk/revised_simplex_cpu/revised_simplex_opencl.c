@@ -22,91 +22,7 @@
 #define MEM_SIZE (128)
 #define MAX_SOURCE_SIZE (0x100000)
 
-void split_matrix(const ELEM* input, ELEM* outputB, ELEM* outputN, const int* indicesB, const int* indicesN, 
-                 const int sizeM, const int sizeN, const int sizeP) {
-  int i;
-  for (i = 0; i < sizeM; ++i) {
-    memcpy(&outputB[sizeP * i], &input[sizeP * indicesB[i]], sizeof(ELEM) * sizeP);
-  }
-  for (i = 0; i < sizeN; ++i) {
-    memcpy(&outputN[sizeP * i], &input[sizeP * indicesN[i]], sizeof(ELEM) * sizeP);
-  }
-}
-
-void transpose_matrix(const ELEM* input, ELEM* output, const int rows, const int cols) {
-  int i, j;
-  for (i = 0; i < cols; ++i) {
-    for (j = 0; j < rows; ++j) {
-      output[i + j * rows] = input[j + i * rows];
-    }
-  }
-}
-
-void solve_matrix(ELEM* input, ELEM* inout, const int sizeM, const int sizeP) {
-  int lda, ldb, b, n, nrhs;
-  int *ipiv;
-
-  n = sizeM;
-  nrhs = sizeP;
-  lda = n;
-  ldb = n;
-  ipiv = malloc(sizeof(int) * n);
-
-  lapack_int info;
-
-  info = LAPACKE_sgesv(LAPACK_COL_MAJOR, n, nrhs, input, lda, ipiv, inout, ldb);
-}
-
-void invert_and_multiply_matrix_vector_minus(const ELEM* A, const ELEM* B, const ELEM* C, const int rows, const int cols) {
-  float alpha = 1.0;
-  integer incx = 1;
-  float beta = 1.0;
-  integer incy = 1;
-  integer irows = rows;
-  integer icols = cols;
-
-  sgemv_("t", &irows, &icols, &alpha, A, &irows, B, &incx, &beta, C, &incy);
-}
-
-void negate_matrix(ELEM* input, const int rows, const int cols) {
-  int i, j;
-  for (i = 0; i < (rows*cols); ++i) {
-    input[i] = -1.0 * input[i]; 
-  }
-}
-
-void max_of_vector(const ELEM* input, const int num_elems, ELEM *max_value, int *max_pos) {
-  if (num_elems >= 1) {
-    *max_value = input[0];
-    *max_pos = 0;
-  }
-  int i;
-  for (i = 1; i < num_elems; ++i) {
-    if (input[i] > *max_value) {
-      *max_value = input[i];
-      *max_pos = i;
-    }
-  }
-}
-
-void pairwise_divide(const ELEM* input1, const ELEM* input2, ELEM* output, const int rows, const int cols) {
-  int i, j;
-  for (i = 0; i < rows; ++i) {
-    for (j = 0; j < cols; ++j) {
-      output[j * rows + i] = input1[j * rows + i] / input2[j * rows + i];
-    }
-  }
-}
-
-void print_matrix(const ELEM* input, const int rows, const int cols) {
-  int i, j;
-  for (i = 0; i < rows; ++i) {
-    for (j = 0; j < cols; ++j) {
-      printf("%3.3f ", input[j * rows + i]);
-    }
-    printf("\n");
-  }
-}
+//#define PRINT_MATRICES
 
 typedef struct App {
   //Foundational parts
@@ -170,13 +86,115 @@ typedef struct App {
   ELEM curObj;  // The current objective value
   ELEM newObj;  // The new objective value at the end of this pivot
   
-  cl_kernel negate_kernel;
   cl_context context;
   cl_command_queue command_queue;
 
+  cl_kernel negate_kernel;
+  cl_kernel max_kernel;
+  cl_kernel inverse_kernel;
+  cl_kernel multiply_kernel;
+  cl_kernel transpose_kernel;
+  cl_kernel pairwise_kernel;
 } App;
 
-#define PRINT_MATRICES
+void split_matrix(const ELEM* input, ELEM* outputB, ELEM* outputN, const int* indicesB, const int* indicesN, 
+                 const int sizeM, const int sizeN, const int sizeP) {
+  int i;
+  for (i = 0; i < sizeM; ++i) {
+    memcpy(&outputB[sizeP * i], &input[sizeP * indicesB[i]], sizeof(ELEM) * sizeP);
+  }
+  for (i = 0; i < sizeN; ++i) {
+    memcpy(&outputN[sizeP * i], &input[sizeP * indicesN[i]], sizeof(ELEM) * sizeP);
+  }
+}
+
+void transpose_matrix(const ELEM* input, ELEM* output, const int rows, const int cols) {
+  int i, j;
+  for (i = 0; i < cols; ++i) {
+    for (j = 0; j < rows; ++j) {
+      output[i + j * rows] = input[j + i * rows];
+    }
+  }
+}
+
+void solve_matrix(ELEM* input, ELEM* inout, const int sizeM, const int sizeP) {
+  int lda, ldb, b, n, nrhs;
+  int *ipiv;
+
+  n = sizeM;
+  nrhs = sizeP;
+  lda = n;
+  ldb = n;
+  ipiv = malloc(sizeof(int) * n);
+
+  lapack_int info;
+
+  info = LAPACKE_sgesv(LAPACK_COL_MAJOR, n, nrhs, input, lda, ipiv, inout, ldb);
+}
+
+void transpose_and_multiply_matrix_vector_add(const ELEM* A, const ELEM* B, const ELEM* C, const int rows, const int cols) {
+  float alpha = 1.0;
+  integer incx = 1;
+  float beta = 1.0;
+  integer incy = 1;
+  integer irows = rows;
+  integer icols = cols;
+
+  sgemv_("t", &irows, &icols, &alpha, A, &irows, B, &incx, &beta, C, &incy);
+}
+
+void negate_matrix(ELEM* input, const int rows, const int cols) {
+  int i, j;
+  for (i = 0; i < (rows*cols); ++i) {
+    input[i] = -1.0 * input[i]; 
+  }
+}
+
+void cl_negate_matrix(App *app, ELEM* input, cl_mem input_in_cl, const int rows, const int cols) {
+  cl_int ret;
+  cl_int per_thread = rows;
+  size_t localSize = 1;
+  size_t globalSize = cols;
+
+  ret = clEnqueueWriteBuffer(app->command_queue, input_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input, 0, NULL, NULL);
+  ret = clSetKernelArg(app->negate_kernel, 0, sizeof(cl_mem), (void*)&input_in_cl);
+  ret = clSetKernelArg(app->negate_kernel, 1, sizeof(cl_int), (void*)&per_thread);
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->negate_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, input_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input, 0, NULL, NULL);
+}
+
+void max_of_vector(const ELEM* input, const int num_elems, ELEM *max_value, int *max_pos) {
+  if (num_elems >= 1) {
+    *max_value = input[0];
+    *max_pos = 0;
+  }
+  int i;
+  for (i = 1; i < num_elems; ++i) {
+    if (input[i] > *max_value) {
+      *max_value = input[i];
+      *max_pos = i;
+    }
+  }
+}
+
+void pairwise_divide(const ELEM* input1, const ELEM* input2, ELEM* output, const int rows, const int cols) {
+  int i, j;
+  for (i = 0; i < rows; ++i) {
+    for (j = 0; j < cols; ++j) {
+      output[j * rows + i] = input1[j * rows + i] / input2[j * rows + i];
+    }
+  }
+}
+
+void print_matrix(const ELEM* input, const int rows, const int cols) {
+  int i, j;
+  for (i = 0; i < rows; ++i) {
+    for (j = 0; j < cols; ++j) {
+      printf("%3.3f ", input[j * rows + i]);
+    }
+    printf("\n");
+  }
+}
 
 int pivot(App *app) {
   app->curObj = app->newObj;
@@ -227,21 +245,13 @@ int pivot(App *app) {
   print_matrix(app->Y_B, app->NUM_B_INDICES, 1);
 #endif
 
+  cl_negate_matrix(app, app->C_N, app->cl_C_N, 1, app->NUM_N_INDICES);
   //negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
 
-      cl_int ret;
-      cl_int per_thread = 1;
-      size_t localSize = 1;
-      size_t globalSize = app->NUM_N_INDICES;
+  transpose_and_multiply_matrix_vector_add(app->A_N, app->Y_B, app->C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
+  cl_negate_matrix(app, app->C_N, app->cl_C_N, 1, app->NUM_N_INDICES);
+  //negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
 
-      ret = clEnqueueWriteBuffer(app->command_queue, app->cl_C_N, CL_TRUE, 0, app->NUM_N_INDICES * sizeof(cl_float), app->C_N, 0, NULL, NULL);
-      ret = clSetKernelArg(app->negate_kernel, 0, sizeof(cl_mem), (void*)&app->cl_C_N);
-      ret = clSetKernelArg(app->negate_kernel, 1, sizeof(cl_int), (void*)&per_thread);
-      ret = clEnqueueNDRangeKernel(app->command_queue, app->negate_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
-      ret = clEnqueueReadBuffer(app->command_queue, app->cl_C_N, CL_TRUE, 0, app->NUM_N_INDICES * sizeof(cl_float), app->C_N, 0, NULL, NULL);
-
-  invert_and_multiply_matrix_vector_minus(app->A_N, app->Y_B, app->C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
-  negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
   app->zRow = app->C_N;
 #ifdef PRINT_MATRICES
   printf("zRow:\n");
@@ -258,7 +268,10 @@ int pivot(App *app) {
     return COMPLETE;
   }
 
+#ifdef PRINT_MATRICES
   printf("Entering variable: %i\n", app->indices_N[max_pos]);
+#endif
+
   int i;
   for (i = 0; i < app->NUM_ROWS; ++i) {
     app->Ad[i] = app->A[app->indices_N[max_pos] * app->NUM_ROWS + i];
@@ -324,6 +337,7 @@ int pivot(App *app) {
   print_matrix(app->s1, app->NUM_ROWS, 1);
 #endif
 
+#ifdef PRINT_MATRICES
   printf("B indices:\n");
   for (i = 0; i < app->NUM_B_INDICES; ++i) 
     printf("%i ", app->indices_B[i]);
@@ -333,6 +347,7 @@ int pivot(App *app) {
   for (i = 0; i < app->NUM_N_INDICES; ++i) 
     printf("%i ", app->indices_N[i]);
   printf("\n");
+#endif
 
   return INCOMPLETE;
 }  
@@ -371,16 +386,23 @@ void setup_opencl(App *app) {
     case (CL_INVALID_CONTEXT) : printf("Invalid context\n"); exit(-1); break;
     case (CL_INVALID_VALUE) : printf("Invalid value\n"); exit(-1); break;
     case (CL_OUT_OF_HOST_MEMORY) : printf("Out of host memory\n"); exit(-1); break;
-    case (CL_SUCCESS) : printf("Program created\n"); break;
+    //case (CL_SUCCESS) : printf("Program created\n"); break;
   }
 
   ret = clBuildProgram(program, 1, &device_id, NULL, NULL, NULL);
+
   app->negate_kernel = clCreateKernel(program, "negate_matrix", &ret);
+  app->inverse_kernel = clCreateKernel(program, "inverse", &ret);
+  app->multiply_kernel = clCreateKernel(program, "multiply", &ret);
+  app->transpose_kernel = clCreateKernel(program, "transpose_matrix", &ret);
+  app->pairwise_kernel = clCreateKernel(program, "pairwise_divide_matrix", &ret);
+  app->max_kernel = clCreateKernel(program, "max_matrix", &ret);
 }
 
 void load_data_file(App *app, const char *filename) {
   FILE *in;
   int i, j;
+  cl_int ret;
 
   if (in = fopen(filename, "rt")) {
     fscanf(in, "%u,%u\n", &app->NUM_ROWS, &app->NUM_COLS);
@@ -399,12 +421,12 @@ void load_data_file(App *app, const char *filename) {
     app->C = (ELEM *)malloc(sizeof(ELEM) * NUM_COLS);
 
     app->B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS);
+    app->cl_B = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
 
     app->A_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
     app->A_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS) * NUM_ROWS);
     app->C_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS);
     app->C_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS));
-    cl_int ret;
     app->cl_C_N = clCreateBuffer(app->context, CL_MEM_READ_WRITE, (NUM_COLS - NUM_ROWS) * sizeof(cl_float), NULL, &ret);
   
     app->A_B_trans = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
@@ -414,6 +436,8 @@ void load_data_file(App *app, const char *filename) {
     app->Y_B_trans = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
 
     app->Ad = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
+    app->cl_Ad = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
+
     app->tVec = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
     app->s1 = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
 
