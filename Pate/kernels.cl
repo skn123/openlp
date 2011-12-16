@@ -1,12 +1,13 @@
 __kernel void multiply(__global float *a, __global float *b, __global float *x, int acols, int arows, int bcols, int brows){
-	int tempx = get_local_id(0);
-	int tempy = get_local_id(1);
+	int temp = get_global_id(0);
+
+	int result = (int)temp/(int)arows;
 
 	float sum = 0.0;
 	for(int i = 0; i < acols; i++){
-		sum += a[tempy]*b[tempx];
+		sum += a[temp%arows + i*arows]*b[i + (result*brows)];
 	}
-	x[tempx * arows + tempy] = sum;
+	x[temp] = sum;
 }
 
 /*
@@ -24,31 +25,6 @@ __kernel void multiply(__global float *a, __global float *b, __global float *x, 
     }
 }
 */
-
-__kernel void pairwise_divide_matrix(__global float *in1, __global float *in2, __global float *out, int size) {
-  int id = get_global_id(0);
-
-  for (int i = 0; i < size; ++i) {
-    out[i + id * size] = in1[i + id * size] / in2[i + id * size];
-  }
-
-}
-
-__kernel void transpose_matrix(__global float *in, __global float *out, int rows) {
-  int id = get_global_id(0);
-
-  for (int j = 0; j < rows; ++j) {
-    out[id + j * rows] = in[j + id * rows];
-  }
-
-}
-
-__kernel void negate_matrix(__global float *inout, int rows) {
-  int id = get_global_id(0);
-  for (int j = 0; j < rows; ++j) {
-    inout[j + id * rows] = inout[j + id * rows] * -1;
-  }
-}
 
 //Takes in row-major matrix and produces the col-major inverse of the matrix
 __kernel void inverse(__global float *Min, __global float *Mout, int actualsize) {
