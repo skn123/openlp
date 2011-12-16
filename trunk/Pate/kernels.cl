@@ -26,6 +26,47 @@ __kernel void multiply(__global float *a, __global float *b, __global float *x, 
 }
 */
 
+__kernel void pairwise_divide_matrix(__global float *in1, __global float *in2, __global float *out, int size) {
+  int id = get_global_id(0);
+
+  for (int i = 0; i < size; ++i) {
+    out[i + id * size] = in1[i + id * size] / in2[i + id * size];
+  }
+
+}
+
+__kernel void transpose_matrix(__global float *in, __global float *out, int size) {
+  int id = get_global_id(0);
+
+  for (int j = 0; j < size; ++j) {
+    out[id + j * size] = in[j + id * size];
+  }
+
+}
+
+__kernel void negate_matrix(__global float *inout, int size) {
+  int id = get_global_id(0);
+  for (int j = 0; j < size; ++j) {
+    inout[j + id * size] = inout[j + id * size] * -1;
+  }
+}
+
+__kernel void max_matrix(__global float *in, __global float *out, __global int *out_pos, int size) {
+  int id = get_global_id(0);
+
+  float max_val = -1000000;
+  int max_pos = -1;
+
+  for (int j = 0; j < size; ++j) {
+    if (max_val < in[id * size + j]) {
+      max_pos = id * size + j; 
+      max_val = in[max_pos];
+    }
+  }
+  out[id] = max_val;
+  out_pos[id] = max_pos; 
+}
+
 //Takes in row-major matrix and produces the col-major inverse of the matrix
 __kernel void inverse(__global float *Min, __global float *Mout, int actualsize) {
     /* Loop variables */
