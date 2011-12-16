@@ -72,7 +72,6 @@ typedef struct App {
   cl_mem cl_Y_B_trans;
 
   ELEM *zRow;      // Temporary calculation of the current objective
-  cl_mem cl_zRow;
 
   ELEM *Ad;        // Entering variable temporary
   cl_mem cl_Ad;
@@ -82,6 +81,12 @@ typedef struct App {
 
   ELEM *s1;        // The new coefficients after pivot  
   cl_mem cl_s1;
+
+  ELEM *max_values;
+  cl_mem cl_max_values;
+  
+  int *max_positions;
+  cl_mem cl_max_positions;
 
   ELEM curObj;  // The current objective value
   ELEM newObj;  // The new objective value at the end of this pivot
@@ -177,6 +182,26 @@ void max_of_vector(const ELEM* input, const int num_elems, ELEM *max_value, int 
   }
 }
 
+void cl_max_of_vector(App *app, const ELEM* input, cl_mem input_in_cl, const int num_elems, ELEM *max_value, int *max_pos) {
+  cl_int ret;
+  cl_int per_thread = num_elems;
+  size_t localSize = 1;
+  size_t globalSize = 1;
+  
+  ret = clEnqueueWriteBuffer(app->command_queue, input_in_cl, CL_TRUE, 0, 1 * sizeof(cl_float), input, 0, NULL, NULL);
+  ret = clSetKernelArg(app->max_kernel, 0, sizeof(cl_mem), (void*)&input_in_cl);
+  ret = clSetKernelArg(app->max_kernel, 1, sizeof(cl_mem), (void*)&app->cl_max_values);
+  ret = clSetKernelArg(app->max_kernel, 2, sizeof(cl_mem), (void*)&app->cl_max_positions);
+  ret = clSetKernelArg(app->max_kernel, 3, sizeof(cl_int), (void*)&per_thread);
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->max_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, app->cl_max_values, CL_TRUE, 0, 1 * sizeof(cl_float), app->max_values, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, app->cl_max_positions, CL_TRUE, 0, 1 * sizeof(cl_int), app->max_positions, 0, NULL, NULL);
+ 
+  //Normally we would reduce further, but this is a vector
+  *max_value = app->max_values[0];
+  *max_pos = app->max_positions[0];
+}
+
 void pairwise_divide(const ELEM* input1, const ELEM* input2, ELEM* output, const int rows, const int cols) {
   int i, j;
   for (i = 0; i < rows; ++i) {
@@ -184,6 +209,23 @@ void pairwise_divide(const ELEM* input1, const ELEM* input2, ELEM* output, const
       output[j * rows + i] = input1[j * rows + i] / input2[j * rows + i];
     }
   }
+}
+
+void cl_pairwise_divide(App *app, const ELEM* input1, cl_mem input1_in_cl, const ELEM* input2, cl_mem input2_in_cl, ELEM* output, 
+                        cl_mem output_in_cl, const int rows, const int cols) {
+  cl_int ret;
+  cl_int per_thread = rows;
+  size_t localSize = 1;
+  size_t globalSize = cols;
+
+  ret = clEnqueueWriteBuffer(app->command_queue, input1_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input1, 0, NULL, NULL);
+  ret = clEnqueueWriteBuffer(app->command_queue, input2_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input2, 0, NULL, NULL);
+  ret = clSetKernelArg(app->pairwise_kernel, 0, sizeof(cl_mem), (void*)&input1_in_cl);
+  ret = clSetKernelArg(app->pairwise_kernel, 1, sizeof(cl_mem), (void*)&input2_in_cl);
+  ret = clSetKernelArg(app->pairwise_kernel, 2, sizeof(cl_mem), (void*)&output_in_cl);
+  ret = clSetKernelArg(app->pairwise_kernel, 3, sizeof(cl_int), (void*)&per_thread);
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->pairwise_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, output_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), output, 0, NULL, NULL);
 }
 
 void print_matrix(const ELEM* input, const int rows, const int cols) {
@@ -261,7 +303,8 @@ int pivot(App *app) {
   ELEM max_value;
   int max_pos;
 
-  max_of_vector(app->zRow, app->NUM_N_INDICES, &max_value, &max_pos);
+  //max_of_vector(app->zRow, app->NUM_N_INDICES, &max_value, &max_pos);
+  cl_max_of_vector(app, app->zRow, app->cl_C_N, app->NUM_N_INDICES, &max_value, &max_pos);
 
   if (max_value < 0) {
     printf("Dictionary is final: %f\n", app->curObj);
@@ -291,7 +334,8 @@ int pivot(App *app) {
   print_matrix(d, app->NUM_ROWS, 1);
 #endif
  
-  pairwise_divide(app->B, d, app->tVec, app->NUM_ROWS, 1);
+  //pairwise_divide(app->B, d, app->tVec, app->NUM_ROWS, 1);
+  cl_pairwise_divide(app, app->B, app->cl_B, d, app->cl_Ad, app->tVec, app->cl_tVec, app->NUM_ROWS, 1);
 #ifdef PRINT_MATRICES
   printf("tVec:\n");
   print_matrix(app->tVec, app->NUM_ROWS, 1);
@@ -439,10 +483,18 @@ void load_data_file(App *app, const char *filename) {
     app->cl_Ad = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
 
     app->tVec = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
+    app->cl_tVec = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
+
     app->s1 = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
 
     app->indices_N = (int *)malloc(sizeof(int) * (app->NUM_N_INDICES));
     app->indices_B = (int *)malloc(sizeof(int) * (app->NUM_B_INDICES));
+
+    app->max_values = (ELEM *)malloc(sizeof(ELEM) * NUM_COLS);
+    app->cl_max_values = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_COLS * sizeof(cl_float), NULL, &ret);
+
+    app->max_positions = (int *)malloc(sizeof(int) * NUM_COLS);
+    app->cl_max_positions = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_COLS * sizeof(cl_int), NULL, &ret);
 
     for (i = 0; i < app->NUM_N_INDICES; ++i) {
       app->indices_N[i] = i;
@@ -528,6 +580,7 @@ int main(int argc, char *argv[]) {
     printf("Loading: %s\n", argv[1]);
     setup_opencl(&app);
     load_data_file(&app, argv[1]);
+    printf("Pivoting...\n");
     while (pivot(&app) == INCOMPLETE);
     //pivot(&app);
   }
