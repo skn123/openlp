@@ -24,12 +24,15 @@
 
 //#define PRINT_MATRICES
 
+#define USE_OPENCL
+
 typedef struct App {
   //Foundational parts
   ELEM *A;   // Our main data matrix
 
   ELEM *A_B; // The current basis of the data matrix
   cl_mem cl_A_B;
+  cl_mem cl_A_B_tmp;
 
   ELEM *A_N; // The current independent section of the data matrix
   cl_mem cl_A_N;
@@ -61,6 +64,7 @@ typedef struct App {
   //Helpful temporaries
   ELEM *A_B_trans; // The transposed A_B
   cl_mem cl_A_B_trans;
+  cl_mem cl_A_B_trans_tmp;
 
   ELEM *C_B_trans; // The transposed C_B
   cl_mem cl_C_B_trans;
@@ -122,6 +126,20 @@ void transpose_matrix(const ELEM* input, ELEM* output, const int rows, const int
   }
 }
 
+void cl_transpose_matrix(App *app, const ELEM* input, cl_mem input_in_cl, ELEM *output, cl_mem output_in_cl, const int rows, const int cols) {
+  cl_int ret;
+  cl_int per_thread = rows;
+  size_t localSize = 1;
+  size_t globalSize = cols;
+
+  ret = clEnqueueWriteBuffer(app->command_queue, input_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input, 0, NULL, NULL);
+  ret = clSetKernelArg(app->transpose_kernel, 0, sizeof(cl_mem), (void*)&input_in_cl);
+  ret = clSetKernelArg(app->transpose_kernel, 1, sizeof(cl_mem), (void*)&output_in_cl);
+  ret = clSetKernelArg(app->transpose_kernel, 2, sizeof(cl_int), (void*)&per_thread);
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->transpose_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, output_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), output, 0, NULL, NULL);
+}
+
 void solve_matrix(ELEM* input, ELEM* inout, const int sizeM, const int sizeP) {
   int lda, ldb, b, n, nrhs;
   int *ipiv;
@@ -135,6 +153,33 @@ void solve_matrix(ELEM* input, ELEM* inout, const int sizeM, const int sizeP) {
   lapack_int info;
 
   info = LAPACKE_sgesv(LAPACK_COL_MAJOR, n, nrhs, input, lda, ipiv, inout, ldb);
+}
+
+void cl_solve_matrix(App *app, ELEM* input1, cl_mem input1_in_cl, cl_mem input1_in_cl_tmp, ELEM* input2, cl_mem input2_in_cl, 
+  ELEM* output, cl_mem output_in_cl, const int rows, const int cols) {
+  
+  cl_int ret;
+  cl_int per_thread = rows;
+  size_t localSize = 1;
+  size_t globalSize_inverse = 1;
+  size_t globalSize_multiply = cols;
+
+  ret = clEnqueueWriteBuffer(app->command_queue, input1_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input1, 0, NULL, NULL);
+  ret = clSetKernelArg(app->transpose_kernel, 0, sizeof(cl_mem), (void*)&input1_in_cl);
+  ret = clSetKernelArg(app->transpose_kernel, 1, sizeof(cl_mem), (void*)&input1_in_cl_tmp);
+  ret = clSetKernelArg(app->transpose_kernel, 2, sizeof(cl_int), (void*)&per_thread);
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->inverse_kernel, 1, NULL, &globalSize_inverse, &localSize, 0, NULL, NULL);
+
+  ret = clEnqueueWriteBuffer(app->command_queue, input2_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input2, 0, NULL, NULL);
+  ret = clSetKernelArg(app->transpose_kernel, 0, sizeof(cl_mem), (void*)&input1_in_cl_tmp);
+  ret = clSetKernelArg(app->transpose_kernel, 1, sizeof(cl_mem), (void*)&input2_in_cl);
+  ret = clSetKernelArg(app->transpose_kernel, 2, sizeof(cl_mem), (void*)&output_in_cl);
+  ret = clSetKernelArg(app->transpose_kernel, 3, sizeof(cl_mem), (void*)&rows);
+  ret = clSetKernelArg(app->transpose_kernel, 4, sizeof(cl_mem), (void*)&cols); // 1?
+  ret = clSetKernelArg(app->transpose_kernel, 5, sizeof(cl_mem), (void*)&rows);
+  ret = clSetKernelArg(app->transpose_kernel, 6, sizeof(cl_mem), (void*)&cols); // 1?
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->multiply_kernel, 1, NULL, &globalSize_multiply, &localSize, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, output_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), output, 0, NULL, NULL);
 }
 
 void transpose_and_multiply_matrix_vector_add(const ELEM* A, const ELEM* B, const ELEM* C, const int rows, const int cols) {
@@ -270,16 +315,26 @@ int pivot(App *app) {
   printf("Matrix A_B:\n");
   print_matrix(app->A_B, app->NUM_B_INDICES, app->NUM_B_INDICES);
 #endif
+
+#ifdef USE_OPENCL
+  cl_transpose_matrix(app, app->A_B, app->cl_A_B, app->A_B_trans, app->cl_A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
+#else
   transpose_matrix(app->A_B, app->A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
-  transpose_matrix(app->C_B, app->C_B_trans, 1, app->NUM_B_INDICES);
+#endif
+
+  memcpy(app->C_B_trans, app->C_B, sizeof(ELEM) * app->NUM_B_INDICES);
+
 #ifdef PRINT_MATRICES
   printf("Matrix A_B':\n");
   print_matrix(app->A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
-  printf("Matrix C_B':\n");
-  print_matrix(app->C_B_trans, app->NUM_B_INDICES, 1);
 #endif
 
+#ifdef USE_OPENCL
+  cl_solve_matrix(app, app->A_B_trans, app->cl_A_B_trans, app->cl_A_B_trans_tmp, app->C_B_trans, app->cl_C_B_trans, app->C_B_trans, app->cl_C_B_trans, app->NUM_B_INDICES, 1);
+#else
   solve_matrix(app->A_B_trans, app->C_B_trans, app->NUM_B_INDICES, 1);
+#endif
+
   app->Y_B = app->C_B_trans;
 
 #ifdef PRINT_MATRICES
@@ -287,12 +342,19 @@ int pivot(App *app) {
   print_matrix(app->Y_B, app->NUM_B_INDICES, 1);
 #endif
 
+#ifdef USE_OPENCL
   cl_negate_matrix(app, app->C_N, app->cl_C_N, 1, app->NUM_N_INDICES);
-  //negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
+#else
+  negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
+#endif
 
   transpose_and_multiply_matrix_vector_add(app->A_N, app->Y_B, app->C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
+
+#ifdef USE_OPENCL
   cl_negate_matrix(app, app->C_N, app->cl_C_N, 1, app->NUM_N_INDICES);
-  //negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
+#else
+  negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
+#endif
 
   app->zRow = app->C_N;
 #ifdef PRINT_MATRICES
@@ -303,8 +365,11 @@ int pivot(App *app) {
   ELEM max_value;
   int max_pos;
 
-  //max_of_vector(app->zRow, app->NUM_N_INDICES, &max_value, &max_pos);
+#ifdef USE_OPENCL
   cl_max_of_vector(app, app->zRow, app->cl_C_N, app->NUM_N_INDICES, &max_value, &max_pos);
+#else
+  max_of_vector(app->zRow, app->NUM_N_INDICES, &max_value, &max_pos);
+#endif
 
   if (max_value < 0) {
     printf("Dictionary is final: %f\n", app->curObj);
@@ -325,7 +390,11 @@ int pivot(App *app) {
   print_matrix(app->Ad, app->NUM_ROWS, 1);
 #endif
 
+#ifdef USE_OPENCL
+  cl_solve_matrix(app, app->A_B, app->cl_A_B, app->cl_A_B_tmp, app->Ad, app->cl_Ad, app->Ad, app->cl_Ad, app->NUM_ROWS, 1);
+#else
   solve_matrix(app->A_B, app->Ad, app->NUM_ROWS, 1);
+#endif
 
   ELEM *d = app->Ad;
 
@@ -334,8 +403,12 @@ int pivot(App *app) {
   print_matrix(d, app->NUM_ROWS, 1);
 #endif
  
-  //pairwise_divide(app->B, d, app->tVec, app->NUM_ROWS, 1);
+#ifdef USE_OPENCL
   cl_pairwise_divide(app, app->B, app->cl_B, d, app->cl_Ad, app->tVec, app->cl_tVec, app->NUM_ROWS, 1);
+#else
+  pairwise_divide(app->B, d, app->tVec, app->NUM_ROWS, 1);
+#endif
+
 #ifdef PRINT_MATRICES
   printf("tVec:\n");
   print_matrix(app->tVec, app->NUM_ROWS, 1);
@@ -468,14 +541,22 @@ void load_data_file(App *app, const char *filename) {
     app->cl_B = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
 
     app->A_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
+    app->cl_A_B = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * NUM_ROWS * sizeof(cl_float), NULL, &ret);
+    app->cl_A_B_tmp = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * NUM_ROWS * sizeof(cl_float), NULL, &ret);
+
     app->A_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS) * NUM_ROWS);
     app->C_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS);
+    app->cl_C_B = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
     app->C_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS));
     app->cl_C_N = clCreateBuffer(app->context, CL_MEM_READ_WRITE, (NUM_COLS - NUM_ROWS) * sizeof(cl_float), NULL, &ret);
   
     app->A_B_trans = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
+    app->cl_A_B_trans = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * NUM_ROWS * sizeof(cl_float), NULL, &ret);
+    app->cl_A_B_trans_tmp = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * NUM_ROWS * sizeof(cl_float), NULL, &ret);
+
     //FIXME: this is a vector and doesn't need a special transpose
     app->C_B_trans = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS));
+    app->cl_C_B_trans = clCreateBuffer(app->context, CL_MEM_READ_WRITE, (NUM_COLS - NUM_ROWS) * sizeof(cl_float), NULL, &ret);
   
     app->Y_B_trans = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
 
