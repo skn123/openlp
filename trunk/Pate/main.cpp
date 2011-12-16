@@ -1,18 +1,13 @@
 #include <iostream>
 #include <string>
 #include <stdio.h>
+#include <CL/cl.h>
 #include <vector>
 #include <fstream>
 #include <sstream>
 #include <stdlib.h>
 #include <limits>
 #include <iomanip>
-
-#ifdef __APPLE__
-#include <OpenCL/opencl.h>
-#else
-#include <CL/cl.h>
-#endif
 
 using namespace std;
 
@@ -134,13 +129,15 @@ int main(){
 	cl_mem Min_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_float), NULL, &ret);
 	cl_mem Mout_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_float), NULL, &ret);
 
-	cl_float amatrix[] = {1, 4, 2, 5, 3, 6};
-	cl_float bmatrix[] = {9, 8, 7};
-	cl_float xmatrix[2] = {0};
+
 	cl_int arows = 3;
-	cl_int acols = 2;
-	cl_int brows = 1;
+	cl_int acols = 3;
+	cl_int brows = 3;
 	cl_int bcols = 3;
+	cl_float amatrix[] = {1, 4, 2, 5, 3, 6, 6, 8, 3};
+	cl_float bmatrix[] = {9, 8, 7, 1, 2, 3, 4, 5, 6};
+	cl_float *xmatrix = new cl_float[arows*bcols];
+	
 
 	cl_mem a_mem_obj = clCreateBuffer(context, CL_MEM_READ_ONLY, arows*acols*sizeof(cl_float),NULL,&ret);
 	cl_mem b_mem_obj = clCreateBuffer(context, CL_MEM_READ_ONLY, brows*bcols*sizeof(cl_float),NULL,&ret);
@@ -194,27 +191,25 @@ int main(){
     ret = clEnqueueTask(command_queue, inverse_kernel, 0, NULL,NULL);
 	//ret = clEnqueueTask(command_queue, multiply_kernel, 0, NULL, NULL);
 
-	size_t localWorkSize[2], globalWorkSize[2];
-	localWorkSize[0] = 3;
-    localWorkSize[1] = 3;
-    globalWorkSize[0] = 3;
-    globalWorkSize[1] = 3;
+	size_t localWorkSize, globalWorkSize;
+	localWorkSize = 1;
+    globalWorkSize = arows*bcols;
 
-	ret = clEnqueueNDRangeKernel(command_queue, multiply_kernel, 2, NULL, globalWorkSize, localWorkSize, 0, NULL, NULL);
+	ret = clEnqueueNDRangeKernel(command_queue, multiply_kernel, 1, NULL, &globalWorkSize, &localWorkSize, 0, NULL, NULL);
 
 	cl_float readFromInverse[9] = {1.1};
  
     // Read the memory buffer C on the device to the local variable C
 	ret = clEnqueueReadBuffer(command_queue, Mout_mem_obj, CL_TRUE, 0, 3*3*sizeof(cl_float), readFromInverse, 0, NULL, NULL);
 	
-	ret = clEnqueueReadBuffer(command_queue, x_mem_obj, CL_TRUE, 0, acols*brows*sizeof(cl_float), xmatrix, 0, NULL, NULL);
+	ret = clEnqueueReadBuffer(command_queue, x_mem_obj, CL_TRUE, 0, arows*bcols*sizeof(cl_float), xmatrix, 0, NULL, NULL);
 
     // Display the result to the screen
     for(int i = 0; i < 9; i++)
 		cout << readFromInverse[i] << " ";
 	cout << endl;
  
-	for(int i = 0; i < 2; i++)
+	for(int i = 0; i < arows*bcols; i++)
 		cout << xmatrix[i] << " ";
 	cout << endl;
 
