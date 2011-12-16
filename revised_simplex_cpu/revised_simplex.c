@@ -13,7 +13,8 @@
 #define ERROR -1
 #define UNBOUNDED -2
 
-void split_matrix(const ELEM* input, ELEM* outputB, ELEM* outputN, const int* indicesB, const int* indicesN, const int sizeM, const int sizeN, const int sizeP) {
+void split_matrix(const ELEM* input, ELEM* outputB, ELEM* outputN, const int* indicesB, const int* indicesN, 
+                 const int sizeM, const int sizeN, const int sizeP) {
   int i;
   for (i = 0; i < sizeM; ++i) {
     memcpy(&outputB[sizeP * i], &input[sizeP * indicesB[i]], sizeof(ELEM) * sizeP);
@@ -47,7 +48,7 @@ void solve_matrix(ELEM* input, ELEM* inout, const int sizeM, const int sizeP) {
   info = LAPACKE_sgesv(LAPACK_COL_MAJOR, n, nrhs, input, lda, ipiv, inout, ldb);
 }
 
-void invert_and_multiple_matrix_vector_minus(const ELEM* A, const ELEM* B, const ELEM* C, const int rows, const int cols) {
+void invert_and_multiply_matrix_vector_minus(const ELEM* A, const ELEM* B, const ELEM* C, const int rows, const int cols) {
   float alpha = 1.0;
   integer incx = 1;
   float beta = 1.0;
@@ -131,49 +132,65 @@ typedef struct App {
   
 } App;
 
+#define PRINT_MATRICES
+
 int pivot(App *app) {
   app->curObj = app->newObj;
 
+#ifdef PRINT_MATRICES
   printf("Matrix A:\n");
   print_matrix(app->A, app->NUM_ROWS, app->NUM_COLS);
   printf("Matrix C:\n");
   print_matrix(app->C, 1, app->NUM_COLS);
+#endif
 
   split_matrix(app->A, app->A_B, app->A_N, app->indices_B, app->indices_N, app->NUM_B_INDICES, app->NUM_N_INDICES, app->NUM_ROWS);
 
+#ifdef PRINT_MATRICES
   printf("Matrix A_B:\n");
   print_matrix(app->A_B, app->NUM_B_INDICES, app->NUM_B_INDICES);
   printf("Matrix A_N:\n");
   print_matrix(app->A_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
   printf("\n");
+#endif
 
   split_matrix(app->C, app->C_B, app->C_N, app->indices_B, app->indices_N, app->NUM_B_INDICES, app->NUM_N_INDICES, 1);
+#ifdef PRINT_MATRICES
   printf("Matrix cB:\n");
   print_matrix(app->C_B, 1, app->NUM_B_INDICES);
   printf("Matrix cN:\n");
   print_matrix(app->C_N, 1, app->NUM_N_INDICES);
+#endif
   
+#ifdef PRINT_MATRICES
   printf("Matrix A_B:\n");
   print_matrix(app->A_B, app->NUM_B_INDICES, app->NUM_B_INDICES);
+#endif
   transpose_matrix(app->A_B, app->A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
   transpose_matrix(app->C_B, app->C_B_trans, 1, app->NUM_B_INDICES);
+#ifdef PRINT_MATRICES
   printf("Matrix A_B':\n");
   print_matrix(app->A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
   printf("Matrix C_B':\n");
   print_matrix(app->C_B_trans, app->NUM_B_INDICES, 1);
+#endif
 
   solve_matrix(app->A_B_trans, app->C_B_trans, app->NUM_B_INDICES, 1);
   app->Y_B = app->C_B_trans;
 
+#ifdef PRINT_MATRICES
   printf("Matrix Y_B:\n");
   print_matrix(app->Y_B, app->NUM_B_INDICES, 1);
+#endif
 
   negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
-  invert_and_multiple_matrix_vector_minus(app->A_N, app->Y_B, app->C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
+  invert_and_multiply_matrix_vector_minus(app->A_N, app->Y_B, app->C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
   negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
   app->zRow = app->C_N;
+#ifdef PRINT_MATRICES
   printf("zRow:\n");
   print_matrix(app->zRow, 1, app->NUM_N_INDICES);
+#endif
 
   ELEM max_value;
   int max_pos;
@@ -191,19 +208,25 @@ int pivot(App *app) {
     app->Ad[i] = app->A[app->indices_N[max_pos] * app->NUM_ROWS + i];
   }
 
+#ifdef PRINT_MATRICES
   printf("Ad:\n");
   print_matrix(app->Ad, app->NUM_ROWS, 1);
+#endif
 
   solve_matrix(app->A_B, app->Ad, app->NUM_ROWS, 1);
 
   ELEM *d = app->Ad;
 
+#ifdef PRINT_MATRICES
   printf("d:\n");
   print_matrix(d, app->NUM_ROWS, 1);
+#endif
  
   pairwise_divide(app->B, d, app->tVec, app->NUM_ROWS, 1);
+#ifdef PRINT_MATRICES
   printf("tVec:\n");
   print_matrix(app->tVec, app->NUM_ROWS, 1);
+#endif
 
   ELEM t = INFINITY;
   int leaveInd = -1;
@@ -223,21 +246,27 @@ int pivot(App *app) {
   }
 
   int leaveVar = app->indices_B[leaveInd];
+#ifdef PRINT_MATRICES
   printf("Leaving var (index: %i): %i\n", leaveInd, leaveVar);
   printf("t: %f\n", t);
+#endif
   for (i = 0; i < app->NUM_ROWS; ++i) {
     app->s1[i] = app->B[i] - t * d[i];
   }
 
+#ifdef PRINT_MATRICES
   printf("s1:\n");
   print_matrix(app->s1, app->NUM_ROWS, 1);
+#endif
 
   app->s1[leaveInd] = t;
   app->indices_B[leaveInd] = app->indices_N[max_pos];
   app->indices_N[max_pos] = leaveVar;
 
+#ifdef PRINT_MATRICES
   printf("s1:\n");
   print_matrix(app->s1, app->NUM_ROWS, 1);
+#endif
 
   printf("B indices:\n");
   for (i = 0; i < app->NUM_B_INDICES; ++i) 
@@ -252,10 +281,136 @@ int pivot(App *app) {
   return INCOMPLETE;
 }  
 
+void load_data_file(App *app, const char *filename) {
+  FILE *in;
+  int i, j;
 
-int main() {
+  if (in = fopen(filename, "rt")) {
+    fscanf(in, "%u,%u\n", &app->NUM_ROWS, &app->NUM_COLS);
+
+    app->NUM_ROWS *= 2;  // To allow for both bounds
+    app->NUM_COLS += app->NUM_ROWS;
+
+    // save typing
+    int NUM_ROWS = app->NUM_ROWS;
+    int NUM_COLS = app->NUM_COLS;    
+
+    app->NUM_B_INDICES = app->NUM_ROWS;
+    app->NUM_N_INDICES = app->NUM_COLS - app->NUM_ROWS;
+
+    app->A = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_COLS);
+    app->C = (ELEM *)malloc(sizeof(ELEM) * NUM_COLS);
+    app->B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS);
+    app->A_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
+    app->A_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS) * NUM_ROWS);
+    app->C_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS);
+    app->C_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS));
+  
+    app->A_B_trans = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
+    //FIXME: this is a vector and doesn't need a special transpose
+    app->C_B_trans = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS));
+  
+    app->Y_B_trans = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
+
+    app->Ad = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
+    app->tVec = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
+    app->s1 = (ELEM *)malloc(sizeof(ELEM) * (NUM_ROWS));
+
+    app->indices_N = (int *)malloc(sizeof(int) * (app->NUM_N_INDICES));
+    app->indices_B = (int *)malloc(sizeof(int) * (app->NUM_B_INDICES));
+
+    for (i = 0; i < app->NUM_N_INDICES; ++i) {
+      app->indices_N[i] = i;
+    }
+
+    for (i = 0; i < app->NUM_B_INDICES; ++i) {
+      app->indices_B[i] = i + app->NUM_N_INDICES;
+    }
+
+    app->curObj = 0;
+    app->newObj = 0;
+    
+    // Read in the objective
+    for (i = 0; i < (app->NUM_COLS - app->NUM_ROWS); ++i) {
+      if (i)
+        fscanf(in, ", %f", &(app->C[i]));
+      else
+        fscanf(in, "%f", &(app->C[i]));
+    }
+    fscanf(in, "\n");
+
+    for (i = (app->NUM_COLS - app->NUM_ROWS); i < app->NUM_COLS; ++i) {
+      app->C[i] = 0.0;
+    }
+
+    // Read in the matrix
+    int row_index, col_index;
+    for (row_index = 0; row_index < app->NUM_ROWS; row_index+=2) {
+      for (col_index = 0; col_index < (app->NUM_COLS - app->NUM_ROWS); ++col_index) {
+        float value;
+        fscanf(in, col_index ? ", %f" : "%f", &value);
+        app->A[col_index * app->NUM_ROWS + row_index] = value;
+        app->A[col_index * app->NUM_ROWS + row_index + 1] = -value;
+      }
+    }
+    fscanf(in, "\n");
+
+    // Fill out the identity side of A
+    for (i = 0; i < app->NUM_ROWS; ++i) {
+      for (j = 0; j < app->NUM_ROWS; ++j) {
+        if (i == j)
+          app->A[(app->NUM_COLS - app->NUM_ROWS) * app->NUM_ROWS + i * app->NUM_ROWS + j] = 1; 
+        else
+          app->A[(app->NUM_COLS - app->NUM_ROWS) * app->NUM_ROWS + i * app->NUM_ROWS + j] = 0; 
+      }
+    }
+
+    // Read the constraint bounds
+    float item;
+    for (i = 0; i < app->NUM_ROWS / 2; ++i) {
+      if (i)
+        fscanf(in, ", %f", &item);
+      else
+        fscanf(in, "%f", &item);
+      
+      app->B[i * 2 + 1] = item;
+    }
+    fscanf(in, "\n");
+
+    // Read the constraint bounds
+    for (i = 0; i < app->NUM_ROWS / 2; ++i) {
+      if (i)
+        fscanf(in, ", %f", &item);
+      else
+        fscanf(in, "%f", &item);
+      
+      app->B[i * 2] = item;
+    }
+    fscanf(in, "\n");
+
+    fclose(in);
+  }
+  else {
+    fprintf(stderr, "Could not open %s\n", filename);
+    exit(-1);
+  }  
+}
+
+int main(int argc, char *argv[]) {
   App app;
 
+  if (argc > 1) {
+    printf("Loading: %s\n", argv[1]);
+    load_data_file(&app, argv[1]);
+    while (pivot(&app) == INCOMPLETE);
+    //pivot(&app);
+  }
+  else {
+    printf("Specify input file\n");
+  }
+   
+    
+/*
   //int NUM_ROWS = 3;
   //int NUM_COLS = 6;
   int NUM_ROWS = 3;
@@ -289,6 +444,7 @@ int main() {
 
   app.curObj = 0;
   app.newObj = 0;
+*/
 /*
   ELEM A[NUM_ROWS * NUM_COLS] = {2, 3, 1, 2, -2, -3, -1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1};
   ELEM C[NUM_COLS] = {1, 3, -1, 0, 0, 0};
@@ -352,6 +508,7 @@ int main() {
   app.indices_N[1] = 1;
   app.indices_N[2] = 2;
 */
+/*
   //BOUNDED
   app.A[0] = -4;
   app.A[1] = -2;
@@ -385,7 +542,6 @@ int main() {
 
   app.indices_N[0] = 0;
   app.indices_N[1] = 1;
-
-  while (pivot(&app) == INCOMPLETE);
+*/
 }
 
