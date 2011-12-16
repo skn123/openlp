@@ -98,7 +98,7 @@ int main(){
 
     cl_float *Min = (cl_float *)malloc(3*3*sizeof(cl_float));
     Min[0] = 1; Min[1] = 3; Min[2] = 1;
-    Min[3] = 1; Min[4] = 1; Min[5] = 2;
+    Min[3] = 1; Min[4] = 6.1; Min[5] = 2;
     Min[6] = 2; Min[7] = 3; Min[8] = 4;
 
     cl_float *Min2 = (cl_float *)malloc(3*3*sizeof(cl_float));
@@ -140,6 +140,8 @@ int main(){
     cl_mem Min_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_float), NULL, &ret);
     cl_mem Min2_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_float), NULL, &ret);
     cl_mem Mout_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_float), NULL, &ret);
+    cl_mem Maxout_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_float), NULL, &ret);
+    cl_mem Maxout_pos_mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 3*3*sizeof(cl_int), NULL, &ret);
 
 	cl_float amatrix[] = {1, 4, 2, 5, 3, 6};
 	cl_float bmatrix[] = {9, 8, 7};
@@ -182,6 +184,8 @@ int main(){
     cl_kernel transpose_kernel = clCreateKernel(program, "transpose_matrix", &ret);
     cl_kernel pairwise_kernel = clCreateKernel(program, "pairwise_divide_matrix", &ret);
 
+    cl_kernel max_kernel = clCreateKernel(program, "max_matrix", &ret);
+
     cl_int actualSize1 = 3;
     ret = clSetKernelArg(negate_kernel, 0, sizeof(cl_mem), (void*)&Min_mem_obj);
     ret = clSetKernelArg(negate_kernel, 1, sizeof(cl_int), (void*)&actualSize1);
@@ -208,6 +212,12 @@ int main(){
     ret = clSetKernelArg(pairwise_kernel, 2, sizeof(cl_mem), (void*)&Mout_mem_obj);
     ret = clSetKernelArg(pairwise_kernel, 3, sizeof(cl_int), (void*)&actualSize);
     ret = clEnqueueNDRangeKernel(command_queue, pairwise_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
+
+    ret = clSetKernelArg(max_kernel, 0, sizeof(cl_mem), (void*)&Min_mem_obj);
+    ret = clSetKernelArg(max_kernel, 1, sizeof(cl_mem), (void*)&Maxout_mem_obj);
+    ret = clSetKernelArg(max_kernel, 2, sizeof(cl_mem), (void*)&Maxout_pos_mem_obj);
+    ret = clSetKernelArg(max_kernel, 3, sizeof(cl_int), (void*)&actualSize);
+    ret = clEnqueueNDRangeKernel(command_queue, max_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
 
 	// Set the arguments of the multiply kernel
 	//__kernel void multiply(__global float *a, __global float *b, __global float *x, int arows, int brows, int bcols) {
@@ -245,11 +255,15 @@ int main(){
 	cl_float readFromReverse[9] = {1.1};
 	cl_float readFromTranspose[9] = {1.1};
 	cl_float readFromPairwise[9] = {1.1};
+	cl_float readFromMax[9] = {1.1};
+	cl_int readFromMaxPos[9] = {1};
  
     // Read the memory buffer C on the device to the local variable C
 	ret = clEnqueueReadBuffer(command_queue, Min_mem_obj, CL_TRUE, 0, 3*3*sizeof(cl_float), readFromInverse, 0, NULL, NULL);
 	ret = clEnqueueReadBuffer(command_queue, Mout_mem_obj, CL_TRUE, 0, 3*3*sizeof(cl_float), readFromTranspose, 0, NULL, NULL);
 	ret = clEnqueueReadBuffer(command_queue, Mout_mem_obj, CL_TRUE, 0, 3*3*sizeof(cl_float), readFromPairwise, 0, NULL, NULL);
+	ret = clEnqueueReadBuffer(command_queue, Maxout_mem_obj, CL_TRUE, 0, 3*sizeof(cl_float), readFromMax, 0, NULL, NULL);
+	ret = clEnqueueReadBuffer(command_queue, Maxout_pos_mem_obj, CL_TRUE, 0, 3*sizeof(cl_float), readFromMaxPos, 0, NULL, NULL);
 	
 	ret = clEnqueueReadBuffer(command_queue, x_mem_obj, CL_TRUE, 0, acols*brows*sizeof(cl_float), xmatrix, 0, NULL, NULL);
 
@@ -277,6 +291,11 @@ int main(){
     cout << "Pairwise: " << std::endl;
     for(int i = 0; i < 9; i++)
       cout << readFromPairwise[i] << " ";
+    cout << endl;
+    
+    cout << "Max: " << std::endl;
+    for(int i = 0; i < 9; i++)
+      cout << readFromMaxPos[i] << ": " << readFromMax[i] << " " << std::endl;
     cout << endl;
     
     for(int i = 0; i < 2; i++)
