@@ -26,6 +26,20 @@
 
 #define USE_OPENCL
 
+#define rdtsc(low,high) \
+     __asm__ __volatile__("rdtsc" : "=a" (low), "=d" (high))
+
+inline void getcycles (long long int * cycles)
+{
+  unsigned long low;
+  long high;
+  rdtsc(low,high);
+  *cycles = high; 
+  *cycles <<= 32; 
+  *cycles |= low; 
+}
+
+
 typedef struct App {
   //Foundational parts
   ELEM *A;   // Our main data matrix
@@ -48,6 +62,7 @@ typedef struct App {
 
   ELEM *C_N; // The independent side of the objective function
   cl_mem cl_C_N;
+  cl_mem cl_C_N_tmp;
 
   int NUM_ROWS;   // The total number of rows of A
   int NUM_COLS;   // The total number of cols of A
@@ -104,6 +119,17 @@ typedef struct App {
   cl_kernel multiply_kernel;
   cl_kernel transpose_kernel;
   cl_kernel pairwise_kernel;
+  cl_kernel subtransmult_kernel;
+
+  long long int negate_cycles;
+  long long int max_cycles;
+  long long int solve_cycles;
+  long long int transpose_cycles;
+  long long int pairwise_cycles;
+  //long long int subtransmult_cycles;
+
+  long long int cycles_start;
+  long long int cycles_stop;
 } App;
 
 void split_matrix(const ELEM* input, ELEM* outputB, ELEM* outputN, const int* indicesB, const int* indicesN, 
@@ -193,6 +219,29 @@ void transpose_and_multiply_matrix_vector_add(const ELEM* A, const ELEM* B, cons
   sgemv_("t", &irows, &icols, &alpha, A, &irows, B, &incx, &beta, C, &incy);
 }
 
+
+void cl_subtract_transpose_multiply(App *app, ELEM *input1, cl_mem input1_in_cl, ELEM *input2, cl_mem input2_in_cl, ELEM *input3, cl_mem input3_in_cl, 
+                                    const int rows, const int cols) {
+
+  cl_int ret;
+  cl_int per_thread = rows;
+  size_t localSize = 1;
+  size_t globalSize = cols;
+
+  ret = clEnqueueWriteBuffer(app->command_queue, input1_in_cl, CL_TRUE, 0, rows * cols * sizeof(cl_float), input1, 0, NULL, NULL);
+  ret = clEnqueueWriteBuffer(app->command_queue, input2_in_cl, CL_TRUE, 0, rows * sizeof(cl_float), input2, 0, NULL, NULL);
+  ret = clEnqueueWriteBuffer(app->command_queue, input3_in_cl, CL_TRUE, 0, cols * sizeof(cl_float), input3, 0, NULL, NULL);
+
+  ret = clSetKernelArg(app->subtransmult_kernel, 0, sizeof(cl_mem), (void*)&input1_in_cl);
+  ret = clSetKernelArg(app->subtransmult_kernel, 1, sizeof(cl_mem), (void*)&input2_in_cl);
+  ret = clSetKernelArg(app->subtransmult_kernel, 2, sizeof(cl_mem), (void*)&input3_in_cl);
+  ret = clSetKernelArg(app->subtransmult_kernel, 3, sizeof(cl_int), (void*)&rows);
+
+  ret = clEnqueueNDRangeKernel(app->command_queue, app->subtransmult_kernel, 1, NULL, &globalSize, &localSize, 0, NULL, NULL);
+  ret = clEnqueueReadBuffer(app->command_queue, input3_in_cl, CL_TRUE, 0, cols * sizeof(cl_float), input3, 0, NULL, NULL);
+}
+
+
 void negate_matrix(ELEM* input, const int rows, const int cols) {
   int i, j;
   for (i = 0; i < (rows*cols); ++i) {
@@ -233,7 +282,7 @@ void cl_max_of_vector(App *app, const ELEM* input, cl_mem input_in_cl, const int
   size_t localSize = 1;
   size_t globalSize = 1;
   
-  ret = clEnqueueWriteBuffer(app->command_queue, input_in_cl, CL_TRUE, 0, 1 * sizeof(cl_float), input, 0, NULL, NULL);
+  ret = clEnqueueWriteBuffer(app->command_queue, input_in_cl, CL_TRUE, 0, num_elems * sizeof(cl_float), input, 0, NULL, NULL);
   ret = clSetKernelArg(app->max_kernel, 0, sizeof(cl_mem), (void*)&input_in_cl);
   ret = clSetKernelArg(app->max_kernel, 1, sizeof(cl_mem), (void*)&app->cl_max_values);
   ret = clSetKernelArg(app->max_kernel, 2, sizeof(cl_mem), (void*)&app->cl_max_positions);
@@ -316,11 +365,14 @@ int pivot(App *app) {
   print_matrix(app->A_B, app->NUM_B_INDICES, app->NUM_B_INDICES);
 #endif
 
+  getcycles(&app->cycles_start);
 #ifdef USE_OPENCL
   cl_transpose_matrix(app, app->A_B, app->cl_A_B, app->A_B_trans, app->cl_A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
 #else
   transpose_matrix(app->A_B, app->A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
 #endif
+  getcycles(&app->cycles_stop);
+  app->transpose_cycles += (app->cycles_stop - app->cycles_start);
 
   memcpy(app->C_B_trans, app->C_B, sizeof(ELEM) * app->NUM_B_INDICES);
 
@@ -329,11 +381,15 @@ int pivot(App *app) {
   print_matrix(app->A_B_trans, app->NUM_B_INDICES, app->NUM_B_INDICES);
 #endif
 
+  getcycles(&app->cycles_start);
 #ifdef USE_OPENCL
-  cl_solve_matrix(app, app->A_B_trans, app->cl_A_B_trans, app->cl_A_B_trans_tmp, app->C_B_trans, app->cl_C_B_trans, app->C_B_trans, app->cl_C_B_trans, app->NUM_B_INDICES, 1);
+  //cl_solve_matrix(app, app->A_B_trans, app->cl_A_B_trans, app->cl_A_B_trans_tmp, app->C_B_trans, app->cl_C_B_trans, app->C_B_trans, app->cl_C_B_trans, app->NUM_B_INDICES, 1);
+  solve_matrix(app->A_B_trans, app->C_B_trans, app->NUM_B_INDICES, 1);
 #else
   solve_matrix(app->A_B_trans, app->C_B_trans, app->NUM_B_INDICES, 1);
 #endif
+  getcycles(&app->cycles_stop);
+  app->solve_cycles += (app->cycles_stop - app->cycles_start);
 
   app->Y_B = app->C_B_trans;
 
@@ -341,20 +397,31 @@ int pivot(App *app) {
   printf("Matrix Y_B:\n");
   print_matrix(app->Y_B, app->NUM_B_INDICES, 1);
 #endif
-
+  
+/*
 #ifdef USE_OPENCL
-  cl_negate_matrix(app, app->C_N, app->cl_C_N, 1, app->NUM_N_INDICES);
-#else
-  negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
-#endif
+  //getcycles(&app->cycles_start);
+  cl_subtract_transpose_multiply(app, app->A_N, app->cl_A_N, app->Y_B, app->cl_C_B_trans, app->C_N, app->cl_C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
+  //getcycles(&app->cycles_stop);
+  //app->subtransmult_cycles += (app->cycles_stop - app->cycles_start);
 
+#else
+*/
+  getcycles(&app->cycles_start);
+  negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
+  getcycles(&app->cycles_stop);
+  app->negate_cycles += (app->cycles_stop - app->cycles_start);
+
+  //getcycles(&app->cycles_start);
   transpose_and_multiply_matrix_vector_add(app->A_N, app->Y_B, app->C_N, app->NUM_B_INDICES, app->NUM_N_INDICES);
+  //getcycles(&app->cycles_stop);
+  //app->subtransmult_cycles += (app->cycles_stop - app->cycles_start);
+//#endif
 
-#ifdef USE_OPENCL
-  cl_negate_matrix(app, app->C_N, app->cl_C_N, 1, app->NUM_N_INDICES);
-#else
+  getcycles(&app->cycles_start);
   negate_matrix(app->C_N, 1, app->NUM_N_INDICES);
-#endif
+  getcycles(&app->cycles_stop);
+  app->negate_cycles += (app->cycles_stop - app->cycles_start);
 
   app->zRow = app->C_N;
 #ifdef PRINT_MATRICES
@@ -364,12 +431,18 @@ int pivot(App *app) {
 
   ELEM max_value;
   int max_pos;
+  int i;
+
+  getcycles(&app->cycles_start);
 
 #ifdef USE_OPENCL
   cl_max_of_vector(app, app->zRow, app->cl_C_N, app->NUM_N_INDICES, &max_value, &max_pos);
 #else
   max_of_vector(app->zRow, app->NUM_N_INDICES, &max_value, &max_pos);
 #endif
+
+  getcycles(&app->cycles_stop);
+  app->max_cycles += (app->cycles_stop - app->cycles_start);
 
   if (max_value < 0) {
     printf("Dictionary is final: %f\n", app->curObj);
@@ -380,7 +453,6 @@ int pivot(App *app) {
   printf("Entering variable: %i\n", app->indices_N[max_pos]);
 #endif
 
-  int i;
   for (i = 0; i < app->NUM_ROWS; ++i) {
     app->Ad[i] = app->A[app->indices_N[max_pos] * app->NUM_ROWS + i];
   }
@@ -390,11 +462,15 @@ int pivot(App *app) {
   print_matrix(app->Ad, app->NUM_ROWS, 1);
 #endif
 
+  getcycles(&app->cycles_start);
 #ifdef USE_OPENCL
-  cl_solve_matrix(app, app->A_B, app->cl_A_B, app->cl_A_B_tmp, app->Ad, app->cl_Ad, app->Ad, app->cl_Ad, app->NUM_ROWS, 1);
+  //cl_solve_matrix(app, app->A_B, app->cl_A_B, app->cl_A_B_tmp, app->Ad, app->cl_Ad, app->Ad, app->cl_Ad, app->NUM_ROWS, 1);
+  solve_matrix(app->A_B, app->Ad, app->NUM_ROWS, 1);
 #else
   solve_matrix(app->A_B, app->Ad, app->NUM_ROWS, 1);
 #endif
+  getcycles(&app->cycles_stop);
+  app->solve_cycles += (app->cycles_stop - app->cycles_start);
 
   ELEM *d = app->Ad;
 
@@ -403,11 +479,14 @@ int pivot(App *app) {
   print_matrix(d, app->NUM_ROWS, 1);
 #endif
  
+  getcycles(&app->cycles_start);
 #ifdef USE_OPENCL
   cl_pairwise_divide(app, app->B, app->cl_B, d, app->cl_Ad, app->tVec, app->cl_tVec, app->NUM_ROWS, 1);
 #else
   pairwise_divide(app->B, d, app->tVec, app->NUM_ROWS, 1);
 #endif
+  getcycles(&app->cycles_stop);
+  app->pairwise_cycles += (app->cycles_stop - app->cycles_start);
 
 #ifdef PRINT_MATRICES
   printf("tVec:\n");
@@ -514,6 +593,7 @@ void setup_opencl(App *app) {
   app->transpose_kernel = clCreateKernel(program, "transpose_matrix", &ret);
   app->pairwise_kernel = clCreateKernel(program, "pairwise_divide_matrix", &ret);
   app->max_kernel = clCreateKernel(program, "max_matrix", &ret);
+  app->subtransmult_kernel = clCreateKernel(program, "subtract_transpose_multiply", &ret);
 }
 
 void load_data_file(App *app, const char *filename) {
@@ -545,10 +625,12 @@ void load_data_file(App *app, const char *filename) {
     app->cl_A_B_tmp = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * NUM_ROWS * sizeof(cl_float), NULL, &ret);
 
     app->A_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS) * NUM_ROWS);
+    app->cl_A_N = clCreateBuffer(app->context, CL_MEM_READ_WRITE, (NUM_COLS - NUM_ROWS) * NUM_ROWS * sizeof(cl_float), NULL, &ret);
     app->C_B = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS);
     app->cl_C_B = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * sizeof(cl_float), NULL, &ret);
     app->C_N = (ELEM *)malloc(sizeof(ELEM) * (NUM_COLS - NUM_ROWS));
     app->cl_C_N = clCreateBuffer(app->context, CL_MEM_READ_WRITE, (NUM_COLS - NUM_ROWS) * sizeof(cl_float), NULL, &ret);
+    app->cl_C_N_tmp = clCreateBuffer(app->context, CL_MEM_READ_WRITE, (NUM_COLS - NUM_ROWS) * sizeof(cl_float), NULL, &ret);
   
     app->A_B_trans = (ELEM *)malloc(sizeof(ELEM) * NUM_ROWS * NUM_ROWS);
     app->cl_A_B_trans = clCreateBuffer(app->context, CL_MEM_READ_WRITE, NUM_ROWS * NUM_ROWS * sizeof(cl_float), NULL, &ret);
@@ -656,14 +738,28 @@ void load_data_file(App *app, const char *filename) {
 
 int main(int argc, char *argv[]) {
   App app;
+  app.negate_cycles = (long long int)0;
+  app.max_cycles = (long long int)0;
+  app.solve_cycles = (long long int)0;
+  app.transpose_cycles = (long long int)0;
+  app.pairwise_cycles = (long long int)0;
 
   if (argc > 1) {
     printf("Loading: %s\n", argv[1]);
     setup_opencl(&app);
     load_data_file(&app, argv[1]);
-    printf("Pivoting...\n");
+#ifdef USE_OPENCL
+    printf("Pivoting (OpenCL)...\n");
+#else
+    printf("Pivoting (BLAS/LAPACK)...\n");
+#endif
     while (pivot(&app) == INCOMPLETE);
     //pivot(&app);
+    printf("Negate cycles: %lli\n", app.negate_cycles);
+    printf("Max cycles: %lli\n", app.max_cycles);
+    printf("Solve cycles(LAPACK): %lli\n", app.solve_cycles);
+    printf("Transpose cycles: %lli\n", app.transpose_cycles);
+    printf("Pairwise cycles: %lli\n", app.pairwise_cycles);
   }
   else {
     printf("Specify input file\n");

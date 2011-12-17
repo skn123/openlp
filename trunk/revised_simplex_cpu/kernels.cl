@@ -1,12 +1,11 @@
-__kernel void multiply_transpose(__global float *a, __global float *b, __global float *x, __global float *y, int acols, int arows, int size){
+__kernel void subtract_transpose_multiply(__global float *a, __global float *b, __global float *y, int arows){
 	int temp = get_global_id(0);
 
-	float sum = 0.0;
-	for(int i = 0; i < arows; i++){
-		sum += a[temp*arows + i]*b[i];
-	}
-	x[temp] = y[temp] - sum;
-	x[temp] = sum - y[temp];
+        float sum = 0.0;
+        for(int i = 0; i < arows; i++){
+                sum += a[temp * arows + i] * b[i];
+        }
+        y[temp] = y[temp] - sum;
 }
 
 
