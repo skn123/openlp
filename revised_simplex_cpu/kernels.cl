@@ -1,3 +1,15 @@
+__kernel void multiply_transpose(__global float *a, __global float *b, __global float *x, __global float *y, int acols, int arows, int size){
+	int temp = get_global_id(0);
+
+	float sum = 0.0;
+	for(int i = 0; i < arows; i++){
+		sum += a[temp*arows + i]*b[i];
+	}
+	x[temp] = y[temp] - sum;
+	x[temp] = sum - y[temp];
+}
+
+
 __kernel void multiply(__global float *a, __global float *b, __global float *x, int acols, int arows, int bcols, int brows){
 	int temp = get_global_id(0);
 
